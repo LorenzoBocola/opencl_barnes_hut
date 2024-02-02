@@ -1,3 +1,10 @@
+obj/
+frames/
+*.mp4
+*.log
+*.csv
+main
+
 # Prerequisites
 *.d
 
