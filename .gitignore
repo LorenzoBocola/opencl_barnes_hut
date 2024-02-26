@@ -4,6 +4,7 @@ frames/
 *.log
 *.csv
 main
+*.ppm
 
 # Prerequisites
 *.d

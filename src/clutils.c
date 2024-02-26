@@ -2,13 +2,18 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 
 #define MAX_SOURCE_SIZE 1000000
 
-void testerrorfunc(cl_int ret,const char *msg,const char *file,int line){
+void testerror_(const char *file, int line,cl_int ret,const char *format,...){
     if(ret!=CL_SUCCESS){
+        va_list args;
+        va_start(args,format);
         fprintf(stderr,"Error in %s at line %d: %d\n",file,line,ret);
-        fprintf(stderr,"%s\n",msg);
+        vfprintf(stderr,format,args);
+        fputc('\n',stderr);
+        va_end(args);
         exit(1);
     }
 }
