@@ -5,10 +5,6 @@
 #include <sys/time.h>
 #include <string.h>
 
-#ifndef CLOCK_REALTIME//vscode shenanigans
-#define CLOCK_REALTIME 0
-#endif
-
 //data
 #define PRINT_VECTOR(fptr,s,vec) fprintf(fptr,"%f,%f,%f"s,(vec).x,(vec).y,(vec).z);
 #define SCAN_VECTOR(fptr,s,vecp) fscanf(fptr,"%f,%f,%f"s,&((vecp)->x),&((vecp)->y),&((vecp)->z));
@@ -22,7 +18,8 @@ FILE *secure_fopen(const char *filename, const char *mode){
     return fptr;
 }
 
-void dump_state(FILE *fptr,float *color,cl_float *masses,cl_float3 *pos,cl_float3 *vel,cl_float3 *acc_old,cl_float3 *acc,cl_int len){
+void dump_state(FILE *fptr,float *color,cl_float *masses,cl_float3 *pos,
+    cl_float3 *vel,cl_float3 *acc_old,cl_float3 *acc,cl_int len){
     for(int i=0;i<len;i++){
         fprintf(fptr,"%f,",color[i]);
         fprintf(fptr,"%f,",masses[i]);
@@ -33,7 +30,8 @@ void dump_state(FILE *fptr,float *color,cl_float *masses,cl_float3 *pos,cl_float
     }
 }
 
-void load_state(FILE *fptr,float *color,cl_float *masses,cl_float3 *pos,cl_float3 *vel,cl_float3 *acc_old,cl_float3 *acc,cl_int len){
+void load_state(FILE *fptr,float *color,cl_float *masses,cl_float3 *pos,
+    cl_float3 *vel,cl_float3 *acc_old,cl_float3 *acc,cl_int len){
     for(int i=0;i<len;i++){
         int ret;
         ret=fscanf(fptr,"%f,",color+i);
@@ -58,13 +56,6 @@ void dump_positions(FILE *fptr,cl_float3 *pos,float *color,cl_int len){
 //log
 #define LOG_LINE_LEN 80
 
-void malloc_check(void *ptr){
-    if(ptr==NULL){
-        fprintf(stderr,"Error: could not allocate memory\n");
-        exit(1);
-    }
-}
-
 struct _log_timer_struct{
     FILE *fptr;
     struct timespec start;
@@ -77,7 +68,10 @@ long long int timediff_ns(struct timespec start, struct timespec finish){
 
 logtimer *create_timer(FILE *fptr){
     logtimer *timer=malloc(sizeof(logtimer));
-    malloc_check(timer);
+    if(timer==NULL){
+        fprintf(stderr,"Error: could not allocate memory\n");
+        exit(1);
+    }
 
     timer->fptr=fptr;
     struct timespec time;

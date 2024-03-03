@@ -1,11 +1,10 @@
 #pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
-//#pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable 
 
 #define SQR(x) ((x)*(x))
 
 #define G 0.001f
 
-#define PRECISION 0.75f
+#define THETA 0.75f
 
 #define MAX_DEPTH 50
 
@@ -13,19 +12,17 @@ __kernel void compute_accelerations(
     __global const float *masses,
     __global const float3 *pos,
     __global float3 *acc,
-    const int len
+    const int particles
 ){
     int id=get_global_id(0);
-    if(id>=len){
+    if(id>=particles){
         return;
     }
     
-    //float selfmass=masses[id];
     float3 selfpos=pos[id];
     float3 acctmp=0;
 
-    //computing acceleration for each other particle
-    for(int i=0;i<len;i++){
+    for(int i=0;i<particles;i++){
         if(i==id){
             continue;
         }
@@ -42,11 +39,11 @@ __kernel void verlet_new_pos(
     __global float3 *pos,
     __global const float3 *vel,
     __global const float3 *acc,
-    const int len,
+    const int particles,
     const float dt
 ){
     int id=get_global_id(0);
-    if(id>=len){
+    if(id>=particles){
         return;
     }
     pos[id]=pos[id]+vel[id]*dt+acc[id]*SQR(dt)/2;
@@ -56,11 +53,11 @@ __kernel void verlet_new_vel(
     __global float3 *vel,
     __global const float3 *acc_old,
     __global const float3 *acc,
-    const int len,
+    const int particles,
     const float dt
 ){
     int id=get_global_id(0);
-    if(id>=len){
+    if(id>=particles){
         return;
     }
     vel[id]=vel[id]+dt*(acc_old[id]+acc[id])/2;
@@ -73,12 +70,12 @@ __kernel void barnes_hut_accelerations(
     __global const float *tree_masses,
     __global const int *tree_children,
     __global const int *tree_leaves,
-    const int len,
+    const int particles,
     float width
 ){
     int id=get_global_id(0);
 
-    if(id>=len){
+    if(id>=particles){
         return;
     }
 
@@ -114,14 +111,13 @@ __kernel void barnes_hut_accelerations(
             subcell_stack[depth]=0;
             posdiff=tree_coms[cell]-pos;
             distsq=dot(posdiff,posdiff);
-            precise_enough=SQR(width/(1<<depth))/distsq<SQR(PRECISION);
+            precise_enough=SQR(width/(1<<depth))/distsq<SQR(THETA);
         }else{
             //decreasing depth
             cell=cell_stack[depth];
             depth--;
             subcell_stack[depth]++;
         }
-        //mem_fence(CLK_LOCAL_MEM_FENCE|CLK_GLOBAL_MEM_FENCE);
     }
 
     acc[id]=acctmp;
@@ -133,10 +129,10 @@ __kernel void count_particles(
     const int2 size,
     const float2 box_min,
     const float2 box_max,
-    const int len
+    const int particles
 ){
     int id=get_global_id(0);
-    if(id>len){
+    if(id>particles){
         return;
     }
     float3 selfpos=pos[id];
@@ -160,7 +156,6 @@ __kernel void process_image(
     const int particles
 ){
     int2 pos={get_global_id(0),get_global_id(1)};
-    //if(pos.x==0&&pos.y==0)printf("TEST\n");
     if(pos.x>=size.x||pos.y>=size.y){
         return;
     }
@@ -197,7 +192,4 @@ __kernel void f2rgb(
     out[3*id+0]=255*clamp(in[id],0.f,1.f);
     out[3*id+1]=255*clamp(in[id],0.f,1.f);
     out[3*id+2]=255*clamp(in[id],0.f,1.f);
-    //out[3*id+0]=255;
-    //out[3*id+1]=255;
-    //out[3*id+2]=255;
 }

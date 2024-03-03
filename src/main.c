@@ -10,14 +10,10 @@
 
 #include "bh.h"
 
-#ifndef M_PI//vscode shenanigans
-#define M_PI 0
-//#error "M_PI undefined"
-#endif
-
-#define PARTICLES 100000
-#define STEPS 1000
-#define DT 0.005
+//#define PARTICLES 100000
+//#define STEPS 1000
+//#define DT 0.005
+#define BUILD_TREE_EVERY 5
 
 #define XMIN -10.
 #define XMAX 10.
@@ -26,7 +22,7 @@
 #define ZMIN -10.
 #define ZMAX 10.
 
-#define TREE_SIZE (3*PARTICLES)
+#define TREE_SIZE(particles) (3*(particles))
 
 #define BH
 
@@ -34,6 +30,8 @@
 #define IMAGE_HEIGTH 1080
 
 #define INIT_TYPE 0
+
+//#define PNG
 
 
 void *secure_malloc(size_t size){
@@ -99,7 +97,7 @@ void init_state(cl_float *masses,float *color,cl_float3 *pos,cl_float3 *vel,cl_f
         }
 #else
 #error invalid INIT_TYPE value
-#endif
+#endif//INIT_TYPE
     }
 }
 
@@ -108,22 +106,30 @@ int main(int argc, char *argv[]){
 
     FILE *logptr=secure_fopen("nbody.log","w");
     logtimer *logt=create_timer(logptr);
-    //log_partial(logt,"start");
 
     cl_int particles;
+    int steps=0;
     int first_frame=0;
-    if(argc<2){
-        particles=PARTICLES;
+    cl_float dt;
+    if(argc<4){
+        fprintf(stderr,"Error: no arguments were passed\nUsage: main #particles #frames dt [initial_state] [first_frame#]\n");
     }else{
-        if(argc<4){
-            fprintf(stderr,"Error: invalid number of arguments\n");
+        particles=atoi(argv[1]);
+        steps=atoi(argv[2]);
+        dt=atof(argv[3]);
+        if(particles<=0){
+            fprintf(stderr,"Error: invalid number of particles\n");
             exit(1);
         }
-        particles=atoi(argv[2]);
-        first_frame=atoi(argv[3]);
+        if(steps<=0){
+            fprintf(stderr,"Error: invalid number of steps\n");
+            exit(1);
+        }
+        if(dt<=0){
+            fprintf(stderr,"Error: invalid timestep\n");
+            exit(1);
+        }
     }
-
-    cl_float dt=DT;
 
     cl_int image_width=IMAGE_WIDTH;
     cl_int image_height=IMAGE_HEIGTH;
@@ -152,19 +158,21 @@ int main(int argc, char *argv[]){
     cl_float3 *acc_old=secure_malloc(particles*sizeof(cl_float3));
     cl_float3 *acc=secure_malloc(particles*sizeof(cl_float3));
 
-    size_t tree_coms_size=TREE_SIZE*sizeof(cl_float3);
-    size_t tree_masses_size=TREE_SIZE*sizeof(cl_float);
-    size_t tree_children_size=8*TREE_SIZE*sizeof(cl_int);
-    size_t tree_leaves_size=TREE_SIZE*sizeof(cl_int);
+    size_t tree_coms_size=TREE_SIZE(particles)*sizeof(cl_float3);
+    size_t tree_masses_size=TREE_SIZE(particles)*sizeof(cl_float);
+    size_t tree_children_size=8*TREE_SIZE(particles)*sizeof(cl_int);
+    size_t tree_leaves_size=TREE_SIZE(particles)*sizeof(cl_int);
 
     size_t particles_count_size=image_width*image_height*sizeof(cl_int);
     size_t image_f_size=image_width*image_height*sizeof(cl_float);
     size_t image_size=image_width*image_height*3*sizeof(cl_char);
 
-    cl_float3 *tree_coms=secure_malloc(TREE_SIZE*sizeof(cl_float3));
-    cl_float *tree_masses=secure_malloc(TREE_SIZE*sizeof(cl_float));
-    cl_int *tree_children=secure_malloc(8*TREE_SIZE*sizeof(cl_int));
-    cl_int *tree_leaves=secure_malloc(TREE_SIZE*sizeof(cl_int));
+    cl_float3 *tree_coms=secure_malloc(TREE_SIZE(particles)*sizeof(cl_float3));
+    cl_float *tree_masses=secure_malloc(TREE_SIZE(particles)*sizeof(cl_float));
+    cl_int *tree_children=secure_malloc(8*TREE_SIZE(particles)*sizeof(cl_int));
+    cl_int *tree_leaves=secure_malloc(TREE_SIZE(particles)*sizeof(cl_int));
+
+    bh_tree *tree=newtree(pos,tree_masses,tree_coms,tree_children,tree_leaves,TREE_SIZE(particles),bbox);
 
     //cl_int *particles_count=secure_malloc(particles_count_size);
     //cl_float *image_f=secure_malloc(image_f_size);
@@ -173,13 +181,16 @@ int main(int argc, char *argv[]){
     log_timer(logt,"Host memory allocated",0,0);
     
     //initializing data
-    if(argc<2){
+    if(argc<5){
         //generating data
         init_state(masses,color,pos,vel,acc_old,acc,particles);
     }else{
         //loading data from state file
-        fptr=secure_fopen(argv[1],"r");
+        fptr=secure_fopen(argv[4],"r");
         load_state(fptr,color,masses,pos,vel,acc_old,acc,particles);
+        if(argc>=6){
+            first_frame=atoi(argv[5]);
+        }
         fclose(fptr);
     }
 
@@ -193,31 +204,31 @@ int main(int argc, char *argv[]){
 
     //creating command queue
     cl_command_queue command_queue=clCreateCommandQueueWithProperties(context, device_id, 0, &ret);
-    testerror(ret,"Failed to create command queue");
+    check_cl_ret(ret,"Failed to create command queue");
 
     //creating buffers
 
     //used for the physical calculations
     cl_mem mass_buffer = clCreateBuffer (context, CL_MEM_READ_WRITE, float_data_size, NULL, &ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
     cl_mem pos_buffer = clCreateBuffer (context, CL_MEM_READ_WRITE, vector_data_size, NULL, &ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
     cl_mem vel_buffer = clCreateBuffer (context, CL_MEM_READ_WRITE, vector_data_size, NULL, &ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
     cl_mem acc_buffer0 = clCreateBuffer (context, CL_MEM_READ_WRITE, vector_data_size, NULL, &ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
     cl_mem acc_buffer1 = clCreateBuffer (context, CL_MEM_READ_WRITE, vector_data_size, NULL, &ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
 
     //BH stuff
     cl_mem tree_coms_buffer=clCreateBuffer(context,CL_MEM_READ_WRITE,tree_coms_size,NULL,&ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
     cl_mem tree_masses_buffer=clCreateBuffer(context,CL_MEM_READ_WRITE,tree_masses_size,NULL,&ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
     cl_mem tree_children_buffer=clCreateBuffer(context,CL_MEM_READ_WRITE,tree_children_size,NULL,&ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
     cl_mem tree_leaves_buffer=clCreateBuffer(context,CL_MEM_READ_WRITE,tree_leaves_size,NULL,&ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
 
     /*
         used to alternate the old and new accelerations buffers without having
@@ -227,11 +238,11 @@ int main(int argc, char *argv[]){
 
     //used to output an image
     cl_mem particles_count_buffer=clCreateBuffer (context, CL_MEM_READ_WRITE, particles_count_size, NULL, &ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
     cl_mem image_f_buffer=clCreateBuffer (context, CL_MEM_READ_WRITE, image_f_size, NULL, &ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
     cl_mem image_RGB_buffer=clCreateBuffer (context, CL_MEM_READ_WRITE, image_size, NULL, &ret);
-    testerror(ret,"Failed to create buffer");
+    check_cl_ret(ret,"Failed to create buffer");
 
     //writing to the buffers
     ret = clEnqueueWriteBuffer (command_queue, mass_buffer, CL_TRUE, 0, float_data_size, (void *)masses, 0, NULL, NULL);
@@ -239,34 +250,34 @@ int main(int argc, char *argv[]){
 	ret |= clEnqueueWriteBuffer (command_queue, vel_buffer, CL_TRUE, 0, vector_data_size, (void *)vel, 0, NULL, NULL);
 	ret |= clEnqueueWriteBuffer (command_queue, acc_buffer0, CL_TRUE, 0, vector_data_size, (void *)acc_old, 0, NULL, NULL);
     ret |= clEnqueueWriteBuffer (command_queue, acc_buffer1, CL_TRUE, 0, vector_data_size, (void *)acc, 0, NULL, NULL);
-    testerror(ret,"Failed to copy data from host to device");
+    check_cl_ret(ret,"Failed to copy data from host to device");
 
     //creating program from .cl file
     cl_program program=program_from_file("src/nbody.cl",context,device_id);
     
     //creating OpenCL kernels
     cl_kernel kernel_acc = clCreateKernel(program, "compute_accelerations", &ret);
-    testerror(ret,"Failed to create kernel");
+    check_cl_ret(ret,"Failed to create kernel");
     cl_kernel kernel_vpos = clCreateKernel(program, "verlet_new_pos", &ret);
-    testerror(ret,"Failed to create kernel");
+    check_cl_ret(ret,"Failed to create kernel");
     cl_kernel kernel_vvel = clCreateKernel(program, "verlet_new_vel", &ret);
-    testerror(ret,"Failed to create kernel");
+    check_cl_ret(ret,"Failed to create kernel");
     cl_kernel kernel_bh = clCreateKernel(program, "barnes_hut_accelerations", &ret);
-    testerror(ret,"Failed to create kernel");
+    check_cl_ret(ret,"Failed to create kernel");
     cl_kernel kernel_count_particles=clCreateKernel(program, "count_particles", &ret);
-    testerror(ret,"Failed to create kernel");
+    check_cl_ret(ret,"Failed to create kernel");
     cl_kernel kernel_image_processing=clCreateKernel(program, "process_image", &ret);
-    testerror(ret,"Failed to create kernel");
+    check_cl_ret(ret,"Failed to create kernel");
     cl_kernel kernel_f2rgb=clCreateKernel(program, "f2rgb", &ret);
-    testerror(ret,"Failed to create kernel");
+    check_cl_ret(ret,"Failed to create kernel");
 
     log_timer(logt,"OpenCL device resourced allocated",0,0);
 
-    for(int i=first_frame;i<STEPS+first_frame;i++){
+    for(int i=first_frame;i<steps+first_frame;i++){
         //simulation loop
 
-        if(!(i%(STEPS<100?1:STEPS/100))){
-            printf("generating frame %d/%d\n",i,STEPS+first_frame);
+        if(!(i%(steps<100?1:steps/100))){
+            printf("generating frame %d/%d\n",i,steps+first_frame);
         }
         log_hrule(logt,'=');
         char framestr[20];
@@ -281,14 +292,14 @@ int main(int argc, char *argv[]){
         ret |= clSetKernelArg(kernel_vpos, 2, sizeof (cl_mem), (void *) acc_bufferp[i%2]);
         ret |= clSetKernelArg(kernel_vpos, 3, sizeof (cl_int), (void *) &particles);
         ret |= clSetKernelArg(kernel_vpos, 4, sizeof (cl_int), (void *) &dt);
-        testerror(ret,"Failed to set positions step kernel arguments");
+        check_cl_ret(ret,"Failed to set positions step kernel arguments");
 
         //O(N^2) accelerations calculating kernel      
         ret  = clSetKernelArg(kernel_acc, 0, sizeof (cl_mem), (void *) &mass_buffer);
         ret |= clSetKernelArg(kernel_acc, 1, sizeof (cl_mem), (void *) &pos_buffer);
         ret |= clSetKernelArg(kernel_acc, 2, sizeof (cl_mem), (void *) acc_bufferp[(i+1)%2]);
         ret |= clSetKernelArg(kernel_acc, 3, sizeof (cl_int), (void *) &particles);
-        testerror(ret,"Failed to set O(N^2) accelerations calculation kernel arguments");
+        check_cl_ret(ret,"Failed to set O(N^2) accelerations calculation kernel arguments");
 
         //BH kernel
         ret  = clSetKernelArg(kernel_bh, 0, sizeof (cl_mem), (void *) acc_bufferp[(i+1)%2]);
@@ -299,7 +310,7 @@ int main(int argc, char *argv[]){
         ret |= clSetKernelArg(kernel_bh, 5, sizeof (cl_mem), (void *) &tree_leaves_buffer);
         ret |= clSetKernelArg(kernel_bh, 6, sizeof (cl_int), (void *) &particles);
         ret |= clSetKernelArg(kernel_bh, 7, sizeof (cl_float), (void *) &(cl_float){xrange.s1-xrange.s0});
-        testerror(ret,"Failed to set BH accelerations calculation kernel arguments");
+        check_cl_ret(ret,"Failed to set BH accelerations calculation kernel arguments");
 
         //velocities stepping kernel
         ret  = clSetKernelArg(kernel_vvel, 0, sizeof (cl_mem), (void *) &vel_buffer);
@@ -307,7 +318,7 @@ int main(int argc, char *argv[]){
         ret |= clSetKernelArg(kernel_vvel, 2, sizeof (cl_mem), (void *) acc_bufferp[(i+1)%2]);
         ret |= clSetKernelArg(kernel_vvel, 3, sizeof (cl_int), (void *) &particles);
         ret |= clSetKernelArg(kernel_vvel, 4, sizeof (cl_int), (void *) &dt);
-        testerror(ret,"Failed to set velocities step kernel arguments");
+        check_cl_ret(ret,"Failed to set velocities step kernel arguments");
 
         //counting particles in each pixel kernel
         ret  = clSetKernelArg(kernel_count_particles, 0, sizeof (cl_mem), (void *) &particles_count_buffer);
@@ -316,7 +327,7 @@ int main(int argc, char *argv[]){
         ret |= clSetKernelArg(kernel_count_particles, 3, sizeof (cl_float2), (void *) &imagebox_min);
         ret |= clSetKernelArg(kernel_count_particles, 4, sizeof (cl_float2), (void *) &imagebox_max);
         ret |= clSetKernelArg(kernel_count_particles, 5, sizeof (cl_int), (void *) &particles);
-        testerror(ret,"Failed to set particles counting kernel arguments");
+        check_cl_ret(ret,"Failed to set particles counting kernel arguments");
 
         //image processing kernel
         ret  = clSetKernelArg(kernel_image_processing, 0, sizeof (cl_mem), (void *) &particles_count_buffer);
@@ -325,12 +336,12 @@ int main(int argc, char *argv[]){
         ret |= clSetKernelArg(kernel_image_processing, 3, sizeof (cl_float2), (void *) &imagebox_min);
         ret |= clSetKernelArg(kernel_image_processing, 4, sizeof (cl_float2), (void *) &imagebox_max);
         ret |= clSetKernelArg(kernel_image_processing, 5, sizeof (cl_int), (void *) &particles);
-        testerror(ret,"Failed to set image processing kernel arguments");
+        check_cl_ret(ret,"Failed to set image processing kernel arguments");
 
         //image conversion (from [0,1] float to RGB) kernel
         ret  = clSetKernelArg(kernel_f2rgb, 0, sizeof (cl_mem), (void *) &image_f_buffer);
         ret |= clSetKernelArg(kernel_f2rgb, 1, sizeof (cl_mem), (void *) &image_RGB_buffer);
-        testerror(ret,"Failed to set image conversion kernel arguments");
+        check_cl_ret(ret,"Failed to set image conversion kernel arguments");
 
         size_t global_work_size=particles;
 
@@ -340,42 +351,43 @@ int main(int argc, char *argv[]){
 
         //updating the positions
         ret = clEnqueueNDRangeKernel(command_queue, kernel_vpos, 1, NULL, &global_work_size, NULL, 0, NULL, &wait_event);
-        testerror(ret,"Failed to execute positions step kernel");
+        check_cl_ret(ret,"Failed to execute positions step kernel");
 
         clWaitForEvents(1,&wait_event);
         log_partial(logt,"Positions updated");
 
         //generating the image
         ret=clEnqueueFillBuffer(command_queue,particles_count_buffer,&(cl_int){0},sizeof(cl_int),0,particles_count_size,0,NULL,NULL);
-        testerror(ret,"Failed to wipe particles_count_buffer");
+        check_cl_ret(ret,"Failed to wipe particles_count_buffer");
 
         ret = clEnqueueNDRangeKernel(command_queue, kernel_count_particles, 1, NULL, &global_work_size, NULL, 0, NULL, &wait_event);
-        testerror(ret,"Failed to execute particles counting kernel");
+        check_cl_ret(ret,"Failed to execute particles counting kernel");
 
         ret = clEnqueueNDRangeKernel(command_queue, kernel_image_processing, 2, NULL, (size_t[]){image_width,image_height}, NULL, 0, NULL, &wait_event);
-        testerror(ret,"Failed to execute image processing kernel");
+        check_cl_ret(ret,"Failed to execute image processing kernel");
 
         ret = clEnqueueNDRangeKernel(command_queue, kernel_f2rgb, 2, NULL, (size_t[]){image_width,image_height}, NULL, 0, NULL, &wait_event);
-        testerror(ret,"Failed to execute image conversion kernel");
+        check_cl_ret(ret,"Failed to execute image conversion kernel");
 
         clWaitForEvents(1,&wait_event);
         log_partial(logt,"Image created");
 
         ret = clEnqueueReadBuffer(command_queue, image_RGB_buffer, CL_TRUE, 0, image_size, (void *)image, 0, NULL, &wait_event);
-        testerror(ret,"Failed to copy buffer image_RGB_buffer from device to host");
+        check_cl_ret(ret,"Failed to copy buffer image_RGB_buffer from device to host");
 
         ret = clEnqueueReadBuffer(command_queue, pos_buffer, CL_TRUE, 0, vector_data_size, (void *)pos, 0, NULL, &wait_event);
-        testerror(ret,"Failed to copy buffer pos_buffer from device to host");
+        check_cl_ret(ret,"Failed to copy buffer pos_buffer from device to host");
 
         clWaitForEvents(1,&wait_event);
         log_partial(logt,"Positions and image buffers copied to host");
 
         //computing the new accelerations
 #ifdef BH
-        oct_tree *tree=newtree(pos,tree_masses,tree_coms,tree_children,tree_leaves,TREE_SIZE,bbox);
-        
-        fill_tree(tree,pos,particles);
-        log_partial(logt,"Octree built");
+        if((i-first_frame)%BUILD_TREE_EVERY==0){  
+            //filling the tree
+            fill_tree(tree,pos,particles);
+            log_partial(logt,"[BUILDING TREE] Octree built");
+        }
 
         summarize_tree(tree,masses,pos);
         log_partial(logt,"Tree summarized");
@@ -384,35 +396,46 @@ int main(int argc, char *argv[]){
         ret |= clEnqueueWriteBuffer (command_queue, tree_masses_buffer, CL_TRUE, 0, tree_masses_size, (void *)tree_masses, 0, NULL, NULL);
         ret |= clEnqueueWriteBuffer (command_queue, tree_children_buffer, CL_TRUE, 0, tree_children_size, (void *)tree_children, 0, NULL, NULL);
         ret |= clEnqueueWriteBuffer (command_queue, tree_leaves_buffer, CL_TRUE, 0, tree_leaves_size, (void *)tree_leaves, 0, NULL, NULL);
-        testerror(ret,"Failed to copy tree buffers");
-
-        free(tree);
+        check_cl_ret(ret,"Failed to copy tree buffers");
 
         ret = clEnqueueNDRangeKernel(command_queue, kernel_bh, 1, NULL, &global_work_size, NULL, 0, NULL, &wait_event);
-        testerror(ret,"Failed to execute BH accelerations computing kernel");
+        check_cl_ret(ret,"Failed to execute BH accelerations computing kernel");
 #else
         ret = clEnqueueNDRangeKernel(command_queue, kernel_acc, 1, NULL, &global_work_size, NULL, 0, NULL, &wait_event);
-        testerror(ret,"Failed to execute O(N^2) accelerations computing kernel");
-#endif
-
-        //converting the image from .ppm to .png (while the accelerations are being computed)
+        check_cl_ret(ret,"Failed to execute O(N^2) accelerations computing kernel");
+#endif//BH
+        
+        //outputting the image
+#ifdef PNG
         char ppm_cmd[40];
         sprintf(ppm_cmd,"convert temp.ppm frames/F%d.png",i);
         fptr=secure_fopen("temp.ppm","wb");
+#else
+        char ppm_name[40];
+        sprintf(ppm_name,"frames/F%d.ppm",i);
+        fptr=secure_fopen(ppm_name,"wb");
+#endif//PNG
         fprintf(fptr,"P6\n%i %i 255\n",IMAGE_WIDTH,IMAGE_HEIGTH);
         fwrite(image,sizeof(char),image_size,fptr);
         fclose(fptr);
+
+        /*
+            converting the image from .ppm to .png (while the accelerations
+            are being computed)
+        */
+#ifdef PNG
         int ppm_cmdrv=system(ppm_cmd);
         if(ppm_cmdrv){
             fprintf(stderr,"Warning: imagemagick convert returned code %d\n",ppm_cmdrv);
         }
+#endif//PNG
 
         clWaitForEvents(1,&wait_event);
         log_partial(logt,"Accelerations computed (and image output)");
 
         //computing the velocities
         ret = clEnqueueNDRangeKernel(command_queue, kernel_vvel, 1, NULL, &global_work_size, NULL, 0, NULL, &wait_event);
-        testerror(ret,"Failed to execute velocities step kernel");
+        check_cl_ret(ret,"Failed to execute velocities step kernel");
 
         clWaitForEvents(1,&wait_event);
         log_partial(logt,"Velocities updated");
@@ -423,9 +446,9 @@ int main(int argc, char *argv[]){
     //dumping the simulation's state
     ret =clEnqueueReadBuffer(command_queue, pos_buffer, CL_TRUE, 0, vector_data_size, (void *)pos, 0, NULL, NULL);
     ret|=clEnqueueReadBuffer(command_queue, vel_buffer, CL_TRUE, 0, vector_data_size, (void *)vel, 0, NULL, NULL);
-    ret|=clEnqueueReadBuffer(command_queue, *acc_bufferp[(STEPS+1)%2], CL_TRUE, 0, vector_data_size, (void *)acc_old, 0, NULL, NULL);
-    ret|=clEnqueueReadBuffer(command_queue, *acc_bufferp[STEPS%2], CL_TRUE, 0, vector_data_size, (void *)acc, 0, NULL, NULL);
-    testerror(ret,"Failed to copy data from device to host");
+    ret|=clEnqueueReadBuffer(command_queue, *acc_bufferp[(steps+1)%2], CL_TRUE, 0, vector_data_size, (void *)acc_old, 0, NULL, NULL);
+    ret|=clEnqueueReadBuffer(command_queue, *acc_bufferp[steps%2], CL_TRUE, 0, vector_data_size, (void *)acc, 0, NULL, NULL);
+    check_cl_ret(ret,"Failed to copy data from device to host");
 
     fptr=secure_fopen("final_state.csv","w");
     dump_state(fptr,color,masses,pos,vel,acc_old,acc,particles);
@@ -433,7 +456,22 @@ int main(int argc, char *argv[]){
 
     log_timer(logt,"Final state dumped",0,0);
 
-    //freeing resources
+    //freeing host resources
+    free(color);
+    free(masses);
+    free(pos);
+    free(vel);
+    free(acc_old);
+    free(acc);
+
+    free(tree_coms);
+    free(tree_masses);
+    free(tree_children);
+    free(tree_leaves);
+
+    free(tree);
+
+    //releasing OpenCL resources
 	clFlush(command_queue);
 	clFinish(command_queue);
 	clReleaseKernel(kernel_acc);

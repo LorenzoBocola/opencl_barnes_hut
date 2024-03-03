@@ -2,10 +2,7 @@
 
 #include <stdio.h>
 
-#define SQR(x) ((x)*(x))
-#define G 0.001
-
-oct_tree *newtree(
+bh_tree *newtree(
     cl_float3 *pos,
     cl_float *masses,
     cl_float3 *coms,
@@ -14,7 +11,7 @@ oct_tree *newtree(
     int max_nodes,
     ot_bbox bbox
 ){
-    oct_tree *t=malloc(sizeof(oct_tree));
+    bh_tree *t=malloc(sizeof(bh_tree));
     if(t==NULL){
         fprintf(stderr,"Error: could not allocate memory for oct tree\n");
         exit(1);
@@ -36,7 +33,7 @@ oct_tree *newtree(
     return t;
 };
 
-void print_node(oct_tree *t, int node){
+void print_node(bh_tree *t, int node){
     printf("NODE %d\n",node);
         printf("LEAF: %d\n",t->tree_leaves[node]);
         printf("MASS: %f\n",t->masses[node]);
@@ -46,7 +43,7 @@ void print_node(oct_tree *t, int node){
         }
 }
 
-int alocate_node(oct_tree *t){
+int alocate_node(bh_tree *t){
     int index=t->nodes_num*8;
     t->nodes_num++;
     if(t->nodes_num>=t->max_nodes){
@@ -60,7 +57,8 @@ int alocate_node(oct_tree *t){
     return t->nodes_num-1;
 }
 
-void add_leaf_(oct_tree *t,int cell,int depth,cl_float3 pos,int leaf,cl_float3 box_corner){
+void add_leaf(bh_tree *t,int cell,int depth,cl_float3 pos,int leaf,cl_float3 box_corner){
+    //particles outside the bounding box of node 0 are ignored
     if(pos.x>t->bbox.xrange.s1||pos.x<t->bbox.xrange.s0||pos.y>t->bbox.yrange.s1||pos.y<t->bbox.yrange.s0||pos.z>t->bbox.zrange.s1||pos.z<t->bbox.zrange.s0){
         return;
     }
@@ -73,9 +71,9 @@ void add_leaf_(oct_tree *t,int cell,int depth,cl_float3 pos,int leaf,cl_float3 b
     if(leaf==-1){
         leaf=t->leaves_num++;
     }
-    //int index=cell*9;//index of the cell in the t->tree array
 
-    float halfx=(t->bbox.xrange.s1-t->bbox.xrange.s0)/(2<<depth);//width of the cell's subcells bounding box
+    //width of the cell's subcells bounding box
+    float halfx=(t->bbox.xrange.s1-t->bbox.xrange.s0)/(2<<depth);
     float halfy=(t->bbox.yrange.s1-t->bbox.yrange.s0)/(2<<depth);
     float halfz=(t->bbox.zrange.s1-t->bbox.zrange.s0)/(2<<depth);
     
@@ -101,7 +99,7 @@ void add_leaf_(oct_tree *t,int cell,int depth,cl_float3 pos,int leaf,cl_float3 b
             if the child cell already exists the function is called again
             with the updated bounding box
         */
-        add_leaf_(t,t->tree_children[child_index],depth+1,pos,leaf,box_corner_);
+        add_leaf(t,t->tree_children[child_index],depth+1,pos,leaf,box_corner_);
     }else{
         if(t->tree_leaves[cell]==-1){
             /*
@@ -128,27 +126,37 @@ void add_leaf_(oct_tree *t,int cell,int depth,cl_float3 pos,int leaf,cl_float3 b
                 printf("%d,%f %f %f\n",leaf,pos.x,pos.y,pos.z);
                 printf("%d,%f %f %f\n",old_leaf,t->leaves[old_leaf].x,t->leaves[old_leaf].y,t->leaves[old_leaf].z);
             }
-            add_leaf_(t,cell,depth,t->leaves[old_leaf],old_leaf,box_corner);
-            add_leaf_(t,cell,depth,pos,leaf,box_corner);
+            add_leaf(t,cell,depth,t->leaves[old_leaf],old_leaf,box_corner);
+            add_leaf(t,cell,depth,pos,leaf,box_corner);
         } 
     }
 }
 
-void fill_tree(oct_tree *t,cl_float3 *leaves_pos,int leaves_num){
+void fill_tree(bh_tree *t,cl_float3 *leaves_pos,int leaves_num){
+    //resetting the tree
+    t->nodes_num=1;
+    for(int i=0;i<8;i++){
+        t->tree_children[i]=-1;
+    }
+    t->tree_leaves[0]=-1;
+
+    //filling the tree
     for(int i=0;i<leaves_num;i++){
-        add_leaf_(t,0,0,leaves_pos[i],i,(cl_float3){t->bbox.xrange.s0,t->bbox.yrange.s0,t->bbox.zrange.s0});
+        add_leaf(t,0,0,leaves_pos[i],i,(cl_float3){t->bbox.xrange.s0,t->bbox.yrange.s0,t->bbox.zrange.s0});
     }
 }
 
-void summarize_tree(oct_tree *t,float *masses,cl_float3 *pos){
+void summarize_tree(bh_tree *t,float *masses,cl_float3 *pos){
     /*
         Since the parent of a cell always precedes it it is possibile to
         compute the masses and centers of mass of each cell by scanning the
         tree array backwards.
     */
     for(int i=t->nodes_num-1;i>=0;i--){
-        //printf("BEFORE PROCESSING\n");
-        //print_node(t,i);
+        /*
+            flushing the celll's children in lower indices accelerate the
+            accelerations' computation
+        */
         for(int child=0;child<8-1;child++){
             if(t->tree_children[8*i+child]==-1){
                 for(int child1=child+1;child1<8;child1++){
@@ -166,7 +174,6 @@ void summarize_tree(oct_tree *t,float *masses,cl_float3 *pos){
         }else{
             float mass_sum=0;
             cl_float3 com_sum={0};
-
             for(int j=0;j<8;j++){
                 int subcell=t->tree_children[8*i+j];
                 if(subcell!=-1){
@@ -182,7 +189,5 @@ void summarize_tree(oct_tree *t,float *masses,cl_float3 *pos){
             t->coms[i].z=com_sum.z/mass_sum;
             t->masses[i]=mass_sum;
         }
-        //printf("AFTER PROCESSING\n");
-        //print_node(t,i);
     }
 }
